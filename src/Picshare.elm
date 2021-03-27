@@ -1,5 +1,6 @@
 module Picshare exposing (main)
 
+-- npx elm make src/Picshare.elm --output picshare.js
 --import Html.Events.Extra exposing (onChange)
 
 import Browser
@@ -7,8 +8,14 @@ import Html exposing (..)
 import Html.Attributes exposing (class, disabled, placeholder, src, type_, value)
 import Html.Events exposing (onClick, onInput, onSubmit)
 import Http
-import Json.Decode exposing (Decoder, bool, int, list, string, succeed)
+import Json.Decode exposing (Decoder, bool, decodeString, int, list, string, succeed)
 import Json.Decode.Pipeline exposing (hardcoded, required)
+import WebSocket
+
+
+wsUrl : String
+wsUrl =
+    "wss:programming-elm.com"
 
 
 type alias Id =
@@ -32,6 +39,15 @@ type alias Feed =
 type alias Model =
     { feed : Maybe Feed
     , error : Maybe Http.Error
+    , streamQueue : Feed
+    }
+
+
+initialModel : Model
+initialModel =
+    { feed = Nothing
+    , error = Nothing
+    , streamQueue = []
     }
 
 
@@ -49,13 +65,6 @@ photoDecoder =
 baseUrl : String
 baseUrl =
     "https://programming-elm.com/"
-
-
-initialModel : Model
-initialModel =
-    { feed = Nothing
-    , error = Nothing
-    }
 
 
 init : () -> ( Model, Cmd Msg )
@@ -169,6 +178,26 @@ errorMessage error =
             後ほど再度お試しください。"""
 
 
+viewStreamNotification : Feed -> Html Msg
+viewStreamNotification queue =
+    case queue of
+        [] ->
+            text ""
+
+        _ ->
+            let
+                content =
+                    "新しい写真を見る: "
+                        ++ String.fromInt (List.length queue)
+                        ++ "件"
+            in
+            div
+                [ class "stream-notification"
+                , onClick FlushStreamQueue
+                ]
+                [ text content ]
+
+
 viewContent : Model -> Html Msg
 viewContent model =
     case model.error of
@@ -177,7 +206,10 @@ viewContent model =
                 [ text (errorMessage error) ]
 
         Nothing ->
-            viewFeed model.feed
+            div []
+                [ viewStreamNotification model.streamQueue
+                , viewFeed model.feed
+                ]
 
 
 view : Model -> Html Msg
@@ -195,6 +227,8 @@ type Msg
     | UpdateComment Id String
     | SaveComment Id
     | LoadFeed (Result Http.Error Feed)
+    | LoadStreamPhoto (Result Json.Decode.Error Photo)
+    | FlushStreamQueue
 
 
 saveNewComment : Photo -> Photo
@@ -268,16 +302,33 @@ update msg model =
 
         LoadFeed (Ok feed) ->
             ( { model | feed = Just feed }
-            , Cmd.none
+            , WebSocket.listen wsUrl
             )
 
         LoadFeed (Err error) ->
             ( { model | error = Just error }, Cmd.none )
 
+        LoadStreamPhoto (Ok photo) ->
+            ( { model | streamQueue = photo :: model.streamQueue }
+            , Cmd.none
+            )
+
+        LoadStreamPhoto (Err _) ->
+            ( model, Cmd.none )
+
+        FlushStreamQueue ->
+            ( { model
+                | feed = Maybe.map ((++) model.streamQueue) model.feed
+                , streamQueue = []
+              }
+            , Cmd.none
+            )
+
 
 subscriptions : Model -> Sub Msg
 subscriptions model =
-    Sub.none
+    WebSocket.receive
+        (LoadStreamPhoto << decodeString photoDecoder)
 
 
 main : Program () Model Msg
